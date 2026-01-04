@@ -1,0 +1,239 @@
+/*
+Copyright 2016 Sebastien Riou
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+    http://www.apache.org/licenses/LICENSE-2.0
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+
+#include "prince_ref.h"
+#include "tables.h"
+#include "bootstrapping.h" //à retirer après tests
+
+
+static const char * testvectors[] = {
+	//test vectors from original Prince paper (http://eprint.iacr.org/2012/529.pdf)
+	"     plain              k0               k1             cipher     ",
+	"0000000000000000 0000000000000000 0000000000000000 818665aa0d02dfda",
+	"ffffffffffffffff 0000000000000000 0000000000000000 604ae6ca03c20ada",
+	"0000000000000000 ffffffffffffffff 0000000000000000 9fb51935fc3df524",
+	"0000000000000000 0000000000000000 ffffffffffffffff 78a54cbe737bb7ef",
+	"0123456789abcdef 0000000000000000 fedcba9876543210 ae25ad3ca8fa9ccf"
+};
+
+
+
+int main(void){
+  //(0) définir les paramètres pour le chiffrement homomorphe
+  const int minimum_lambda = 110;
+  static const int32_t N = 2048;
+  static const int32_t k = 1;
+  static const int32_t n = 1024;
+  static const int32_t bk_l = 3;
+  static const int32_t bk_Bgbit = 8;
+  static const int32_t ks_basebit = 10;
+  static const int32_t ks_length = 2;
+  static const double ks_stdev = pow(5.6,-8);//standard deviation
+  static const double bk_stdev = pow(9.6,-11);//standard deviation
+  static const double max_stdev = 0.012467; //max standard deviation for a 1/4 msg space
+  LweParams *params_in = new_LweParams(n, ks_stdev, max_stdev);
+  TLweParams *params_accum = new_TLweParams(N, k, bk_stdev, max_stdev);
+  TGswParams *params_bk = new_TGswParams(bk_l, bk_Bgbit, params_accum);
+
+  TfheGarbageCollector::register_param(params_in);
+  TfheGarbageCollector::register_param(params_accum);
+  TfheGarbageCollector::register_param(params_bk);
+  
+  TFheGateBootstrappingParameterSet* params = new TFheGateBootstrappingParameterSet(ks_length, ks_basebit, params_in, params_bk);
+  uint32_t seed[] = {314, 1592, 657, 26363, 394, 4958, 4059, 3845};
+  tfhe_random_generator_setSeed(seed, 8);
+  TFheGateBootstrappingSecretKeySet* key = new_random_gate_bootstrapping_secret_keyset(params);
+  const LweKey * k_in = key->lwe_key;
+  const TLweKey * k_out = &key->tgsw_key->tlwe_key;
+  BaseBKeySwitchKey* ks_key = new_BaseBKeySwitchKey( key->lwe_key->params->n, 2, 10, 16, key->cloud.bk->accum_params);
+  BaseBExtra::CreateKeySwitchKey(ks_key, k_in, k_out);
+  printf("Etape 0 terminée\n");
+  //(1) choisir le chiffré pour les tests
+  uint64_t cleartexts[5] = {0x0000000000000000, 0xffffffffffffffff, 0x0000000000000000, 0x0000000000000000, 0x0123456789abcdef};
+  uint64_t k_0_tab [5] = {0x0000000000000000, 0x0000000000000000, 0xffffffffffffffff, 0x000000000000000, 0x0000000000000000};
+  uint64_t k_1_tab [5] = {0x0000000000000000, 0x0000000000000000, 0x000000000000000, 0xffffffffffffffff, 0xfedcba9876543210};
+  uint64_t ciphertexts[5] = {0x818665aa0d02dfda, 0x604ae6ca03c20ada, 0x9fb51935fc3df524, 0x78a54cbe737bb7ef, 0xae25ad3ca8fa9ccf};
+  uint64_t k_0_prime_tab[5];
+  printf("Etape 1 terminée\n");
+  //(2) faire l'extension de clef k0' = (k0 >>> 1) ⊕ (k0 >> 63)
+  for(int i = 0; i <5; i++)
+    k_0_prime_tab[i] = key_schedule(k_0_tab[i]);
+  printf("Etape 2 terminée\n");
+  //(3) faire le xor de la clef k1 avec les constantes de tour
+  uint64_t rcki_tab[12];
+  for(int i = 0; i<12; i++)
+    rcki_tab[i] = k_1_tab[0] ^ RC[i];
+  printf("Etape 3 terminée\n");
+  //(4) chiffrer k0, k0' et les rcki
+  word8 k_0_decompo[8];
+  word8 k_0_prime_decompo[8];
+  word8 rcki_decompo[12][8];
+  word8 message[8];
+  encode(k_0_decompo, k_0_tab[0]);
+  encode(k_0_prime_decompo, k_0_prime_tab[0]);
+  for(int i = 0; i<12; i++)
+    encode(rcki_decompo[i], rcki_tab[i]);
+  encode(message, cleartexts[0]);
+  vector<LweSample*> k_0_fhe[8];
+  vector<LweSample*> k_0_prime_fhe[8];
+  vector<LweSample*> rcki_fhe[12][8];
+  vector<LweSample*> msg_fhe[8];
+  Enc_tab(k_0_fhe, k_0_decompo, key);
+  Enc_tab(k_0_prime_fhe, k_0_prime_decompo, key);
+  for(int i = 0; i<12; i++)
+    Enc_tab(rcki_fhe[i], rcki_decompo[i], key);
+  printf("Etape 4 terminée\n");
+  //(5) chiffrer le texte clair en homomorphe
+  Enc_tab(msg_fhe, message, key);
+  printf("Etape 5 terminée\n");
+  //(6) appliquer l'algo de chiffrement dans le domaine homomorphe
+  struct timespec begin, end; 
+  clock_gettime(CLOCK_REALTIME, &begin);
+  // On xore avec k0
+  xor_key_fhe(msg_fhe,k_0_fhe, key, ks_key);
+  prince_core_fhe(msg_fhe, rcki_fhe, key, ks_key);
+  // On xore avec k0'
+  xor_key_fhe(msg_fhe,k_0_prime_fhe, key, ks_key);
+  clock_gettime(CLOCK_REALTIME, &end);
+  long seconds = end.tv_sec - begin.tv_sec;
+  long nanoseconds = end.tv_nsec - begin.tv_nsec;
+  double elapsed = seconds + nanoseconds*1e-9;
+  printf("Etape 6 terminée\n");
+  //(7) déchiffrer et vérifier qu'il s'agit bien du bon chiffré symétrique.
+  word8 base =16;
+  for(int j = 0; j<8; ++j){
+    int32_t decr0 = lweSymDecrypt(msg_fhe[j][0], key->lwe_key, 32);
+    double decrd0 = t32tod(decr0);
+    int32_t decr1 = lweSymDecrypt(msg_fhe[j][1], key->lwe_key, 32);
+    double decrd1 = t32tod(decr1);
+     message[j]= (int)(decrd0*32+base)%base*base + (int)(decrd1*32+base)%base;
+  }    
+  printf("[a]  = 0x");
+  for(int i = 0; i < 8; ++i){
+    printf("%.2x", message[i]);
+  }
+  
+  delete_gate_bootstrapping_secret_keyset(key);
+  delete_gate_bootstrapping_parameters(params);
+  delete_BaseBKeySwitchKey(ks_key);
+  printf("\nverif: 0x%lx\n", ciphertexts[0]);
+  printf("temps : %.5f\n", elapsed); 
+  printf("\ndone\n");
+  
+    return 0;
+}
+
+
+
+int main7(){
+ //(0) définir les paramètres pour le chiffrement homomorphe
+  const int minimum_lambda = 110;
+  static const int32_t N = 2048;
+  static const int32_t k = 1;
+  static const int32_t n = 1024;
+  static const int32_t bk_l = 3;
+  static const int32_t bk_Bgbit = 8;
+  static const int32_t ks_basebit = 10;
+  static const int32_t ks_length = 2;
+  static const double ks_stdev = pow(5.6,-8);//standard deviation
+  static const double bk_stdev = pow(9.6,-11);//standard deviation
+  static const double max_stdev = 0.012467; //max standard deviation for a 1/4 msg space
+  LweParams *params_in = new_LweParams(n, ks_stdev, max_stdev);
+  TLweParams *params_accum = new_TLweParams(N, k, bk_stdev, max_stdev);
+  TGswParams *params_bk = new_TGswParams(bk_l, bk_Bgbit, params_accum);
+
+  TfheGarbageCollector::register_param(params_in);
+  TfheGarbageCollector::register_param(params_accum);
+  TfheGarbageCollector::register_param(params_bk);
+  
+  TFheGateBootstrappingParameterSet* params = new TFheGateBootstrappingParameterSet(ks_length, ks_basebit, params_in, params_bk);
+  uint32_t seed[] = {314, 1592, 657, 26363, 394, 4958, 4059, 3845};
+  tfhe_random_generator_setSeed(seed, 8);
+  TFheGateBootstrappingSecretKeySet* key = new_random_gate_bootstrapping_secret_keyset(params);
+  const LweKey * k_in = key->lwe_key;
+  const TLweKey * k_out = &key->tgsw_key->tlwe_key;
+  BaseBKeySwitchKey* ks_key = new_BaseBKeySwitchKey( key->lwe_key->params->n, 2, 10, 16, key->cloud.bk->accum_params);
+  BaseBExtra::CreateKeySwitchKey(ks_key, k_in, k_out);
+  printf("Etape 0 terminée\n");
+  //(1) choisir le chiffré pour les tests
+  uint64_t cleartexts[5] = {0x0123456789abcdef, 0xffffffffffffffff, 0x8100000000000000, 0x0000000000000000, 0x0123456789abcdef};
+  word8 message[8];
+  printf("message à chiffrer : 0x%lx !\n", cleartexts[0]);
+  encode(message, cleartexts[2]);
+  printf("Encodage du message en 8 octets terminé\n");
+  printf("[a]  = ");
+  for(int i = 0; i < 8; ++i){
+    printf("%.2x", message[i]);
+  }
+  printf("\n");
+  
+  vector<LweSample*> msg_fhe[8]; 
+  //(5) chiffrer le texte clair en homomorphe
+  Enc_tab(msg_fhe, message, key);
+  printf("Chiffrement homomorphe terminé\n");
+  //(6) appliquer l'algo de chiffrement dans le domaine homomorphe
+  for(int i=0 ; i<8; i++){
+  deref_single_boot(msg_fhe[i], key, msg_fhe[i], ks_key, 0, id);
+  deref_single_boot(msg_fhe[i], key, msg_fhe[i], ks_key, 1, id);
+  }
+  printf("Application du bootstrapping identité terminée !\n");
+  shiftrows_fhe(msg_fhe, 1);
+  printf("Application du ShiftRows !\n");
+  shiftrows_fhe(msg_fhe,-1);
+  printf("Application de l'inverse du ShiftRows, normalement rien n'a changé !\n");
+  XOR_fhe(msg_fhe[0], msg_fhe[1], key, ks_key);
+  printf("On a fait le XOR des deux premiers octets !\n");
+  //(7) déchiffrer et vérifier qu'il s'agit bien du bon chiffré symétrique.
+  word8 base =16;
+  for(int j = 0; j<8; ++j){
+    int32_t decr0 = lweSymDecrypt(msg_fhe[j][0], key->lwe_key, 32);
+    double decrd0 = t32tod(decr0);
+    int32_t decr1 = lweSymDecrypt(msg_fhe[j][1], key->lwe_key, 32);
+    double decrd1 = t32tod(decr1);
+    message[j]= (int)(decrd0*32+base)%base*base + (int)(decrd1*32+base)%base;
+  }
+
+  printf("[a]  = ");
+  for(int i = 0; i < 8; ++i){
+    printf("%.2x", message[i]);
+  }
+  
+  delete_gate_bootstrapping_secret_keyset(key);
+  delete_gate_bootstrapping_parameters(params);
+  delete_BaseBKeySwitchKey(ks_key);
+  printf("\ndone\n");
+  return 0;
+}
+
+
+int main8(){
+
+  int a0=42;
+  int a1=42;
+  int a2=56;
+  vector<int*>pa(2);
+  pa[0]=&a0;
+  pa[1]=&a1;
+  vector<int*> pb;
+  printf("adresse pa[1]=%p\n", pa[1]);
+  pb.push_back(pa.back());
+  pa.pop_back();
+  printf("adresse pb[0]=%p\n", pb[0]);
+  printf("b[0]=%d\n", *pb[0]);
+  printf("adresse pa[1]=%p\n", pa[1]);
+  pa.push_back(&a2);
+  printf("adresse pa[1]=%p et a[1]=%d\n", pa[1], *pa[1]);
+  printf("adresse pb[0]=%p\n", pb[0]);
+  return 0;
+}

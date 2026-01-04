@@ -1,0 +1,284 @@
+#include "prince_ref.h"
+#include "tables.h"
+#include "bootstrapping.h"
+
+
+
+// renvoie k0'
+uint64_t key_schedule(const uint64_t k0){
+  uint64_t k0_ror1 = (k0 >> 1) | (k0 << 63);
+  uint64_t k0_prime = k0_ror1 ^ (k0 >> 63);
+  return k0_prime;
+}
+
+
+void xor_k_and_rc(vector <LweSample*> a[8],vector <LweSample*> rc_k[8], TFheGateBootstrappingSecretKeySet* gk, BaseBKeySwitchKey* ks_key){
+  for(int i = 0; i<8; i++)
+    XOR_fhe(a[i], rc_k[i], gk, ks_key);
+}
+
+
+
+//The S step of the cipher. Works on encryption of nibbles.
+void s_layer_fhe(vector <LweSample*> a[8], TFheGateBootstrappingSecretKeySet* gk, BaseBKeySwitchKey* ks_key) {
+  int k;
+  //#pragma omp parallel for default(shared) private(k,i,j) num_threads(16)
+  for(k =0; k<8; k++){
+    deref_single_boot(a[k], gk, a[k], ks_key, 0, sbox);
+    deref_single_boot(a[k], gk, a[k], ks_key, 1, sbox);
+    }
+}
+
+void inv_s_layer_fhe(vector <LweSample*> a[8], TFheGateBootstrappingSecretKeySet* gk, BaseBKeySwitchKey* ks_key) {
+  int k;
+  //#pragma omp parallel for default(shared) private(k,i,j) num_threads(16)
+  for(k =0; k<8; k++){
+    deref_single_boot(a[k], gk, a[k], ks_key, 0, sbox_inv);
+    deref_single_boot(a[k], gk, a[k], ks_key, 1, sbox_inv);
+    }
+}
+
+
+//The multiplication of the state with the matrix M'.
+void m_prime_fhe(vector <LweSample*> a[8], TFheGateBootstrappingSecretKeySet* gk, BaseBKeySwitchKey* ks_key) {
+  //Voir pour la parallélisation plus tard.
+  vector <LweSample*> alpha, t_0_1, t_2_3, t_0_and, t_1_and, t_2_and, t_3_and;
+  alpha.push_back(new_LweSample(gk->lwe_key->params));
+  alpha.push_back(new_LweSample(gk->lwe_key->params));
+  t_0_1.push_back(new_LweSample(gk->lwe_key->params));
+  t_0_1.push_back(new_LweSample(gk->lwe_key->params));
+  t_2_3.push_back(new_LweSample(gk->lwe_key->params));
+  t_2_3.push_back(new_LweSample(gk->lwe_key->params));
+  t_0_and.push_back(new_LweSample(gk->lwe_key->params));
+  t_1_and.push_back(new_LweSample(gk->lwe_key->params));
+  t_2_and.push_back(new_LweSample(gk->lwe_key->params));
+  t_3_and.push_back(new_LweSample(gk->lwe_key->params));
+
+   vector <LweSample*> t_0, t_1, t_2, t_3;
+
+  for(int i=0 ; i<7; i=i+6){
+    //calcul des constantes pour les deux premiers octets
+    lweCopy(alpha[0], a[i][0], gk->lwe_key->params);
+    lweCopy(alpha[1], a[i][1], gk->lwe_key->params);
+    XOR_fhe(alpha, a[i+1], gk, ks_key);
+    lweCopy(t_0_1[0], a[i][1], gk->lwe_key->params);
+    lweCopy(t_0_1[1], a[i][0], gk->lwe_key->params);
+    XOR_fhe(t_0_1,alpha, gk, ks_key);
+    lweCopy(t_2_3[0], a[i+1][1], gk->lwe_key->params);
+    lweCopy(t_2_3[1], a[i+1][0], gk->lwe_key->params);
+    XOR_fhe(t_2_3,alpha, gk, ks_key);
+    //ici ok
+    t_0.push_back(new_LweSample(gk->lwe_key->params));
+    lweCopy(t_0[0], t_0_1[0], gk->lwe_key->params);
+    t_1.push_back(new_LweSample(gk->lwe_key->params));
+    lweCopy(t_1[0], t_0_1[1], gk->lwe_key->params);
+    t_2.push_back(new_LweSample(gk->lwe_key->params));
+    lweCopy(t_2[0], t_2_3[0], gk->lwe_key->params);
+    t_3.push_back(new_LweSample(gk->lwe_key->params));
+    lweCopy(t_3[0], t_2_3[1], gk->lwe_key->params);
+    //ici ok
+    //calcul du premier nibble
+    and_fhe(t_0_and, t_0, gk, ks_key, and_1);
+    and_fhe(t_1_and, t_1, gk, ks_key, and_2);
+    and_fhe(t_2_and, t_2, gk, ks_key, and_4);
+    and_fhe(t_3_and, t_3, gk, ks_key, and_8);
+    lweCopy(a[i][0], t_0_and[0],gk->lwe_key->params); 
+    lweAddTo(a[i][0], t_1_and[0], gk->lwe_key->params);
+    lweAddTo(a[i][0], t_2_and[0], gk->lwe_key->params);
+    lweAddTo(a[i][0], t_3_and[0], gk->lwe_key->params);
+    
+    //calcul du deuxieme nibble
+    and_fhe(t_0_and, t_0, gk, ks_key, and_8);
+    and_fhe(t_1_and, t_1, gk, ks_key, and_1);
+    and_fhe(t_2_and, t_2, gk, ks_key, and_2);
+    and_fhe(t_3_and, t_3, gk, ks_key, and_4);
+    
+    lweCopy(a[i][1], t_0_and[0],gk->lwe_key->params); 
+    lweAddTo(a[i][1], t_1_and[0], gk->lwe_key->params);
+    lweAddTo(a[i][1], t_2_and[0], gk->lwe_key->params);
+    lweAddTo(a[i][1], t_3_and[0], gk->lwe_key->params);
+    
+    //calcul du troisieme nibble
+    and_fhe(t_0_and, t_0, gk, ks_key, and_4);
+    and_fhe(t_1_and, t_1, gk, ks_key, and_8);
+    and_fhe(t_2_and, t_2, gk, ks_key, and_1);
+    and_fhe(t_3_and, t_3, gk, ks_key, and_2);
+    
+    lweCopy(a[i+1][0], t_0_and[0],gk->lwe_key->params); 
+    lweAddTo(a[i+1][0], t_1_and[0], gk->lwe_key->params);
+    lweAddTo(a[i+1][0], t_2_and[0], gk->lwe_key->params);
+    lweAddTo(a[i+1][0], t_3_and[0], gk->lwe_key->params);
+    
+    //calcul du quatrieme nibble
+    and_fhe(t_0_and, t_0, gk, ks_key, and_2);
+    and_fhe(t_1_and, t_1, gk, ks_key, and_4);
+    and_fhe(t_2_and, t_2, gk, ks_key, and_8);
+    and_fhe(t_3_and, t_3, gk, ks_key, and_1);
+    
+    lweCopy(a[i+1][1], t_0_and[0],gk->lwe_key->params); 
+    lweAddTo(a[i+1][1], t_1_and[0], gk->lwe_key->params);
+    lweAddTo(a[i+1][1], t_2_and[0], gk->lwe_key->params);
+    lweAddTo(a[i+1][1], t_3_and[0], gk->lwe_key->params);
+  }
+  for(int i=2 ; i<5; i=i+2){
+    //calcul des constantes pour les quatres octets centraux
+    lweCopy(alpha[0], a[i][0], gk->lwe_key->params);
+    lweCopy(alpha[1], a[i][1], gk->lwe_key->params);
+    XOR_fhe(alpha, a[i+1], gk, ks_key);
+    lweCopy(t_0_1[0], a[i][1], gk->lwe_key->params);
+    lweCopy(t_0_1[1], a[i][0], gk->lwe_key->params);
+    XOR_fhe(t_0_1,alpha, gk, ks_key);
+    lweCopy(t_2_3[0], a[i+1][1], gk->lwe_key->params);
+    lweCopy(t_2_3[1], a[i+1][0], gk->lwe_key->params);
+    XOR_fhe(t_2_3,alpha, gk, ks_key);
+
+    lweCopy(t_0[0], t_0_1[0],gk->lwe_key->params);
+    lweCopy(t_1[0], t_0_1[1],gk->lwe_key->params);
+    lweCopy(t_2[0], t_2_3[0],gk->lwe_key->params);
+    lweCopy(t_3[0], t_2_3[1],gk->lwe_key->params);
+
+     //calcul du premier nibble
+    and_fhe(t_0_and, t_0, gk, ks_key, and_8);
+    and_fhe(t_1_and, t_1, gk, ks_key, and_1);
+    and_fhe(t_2_and, t_2, gk, ks_key, and_2);
+    and_fhe(t_3_and, t_3, gk, ks_key, and_4);
+    lweCopy(a[i][0], t_0_and[0],gk->lwe_key->params); 
+    lweAddTo(a[i][0], t_1_and[0], gk->lwe_key->params);
+    lweAddTo(a[i][0], t_2_and[0], gk->lwe_key->params);
+    lweAddTo(a[i][0], t_3_and[0], gk->lwe_key->params);
+    
+    //calcul du deuxieme nibble
+    and_fhe(t_0_and, t_0, gk, ks_key, and_4);
+    and_fhe(t_1_and, t_1, gk, ks_key, and_8);
+    and_fhe(t_2_and, t_2, gk, ks_key, and_1);
+    and_fhe(t_3_and, t_3, gk, ks_key, and_2);
+    
+    lweCopy(a[i][1], t_0_and[0],gk->lwe_key->params); 
+    lweAddTo(a[i][1], t_1_and[0], gk->lwe_key->params);
+    lweAddTo(a[i][1], t_2_and[0], gk->lwe_key->params);
+    lweAddTo(a[i][1], t_3_and[0], gk->lwe_key->params);
+    
+  //calcul du troisieme nibble
+    and_fhe(t_0_and, t_0, gk, ks_key, and_2);
+    and_fhe(t_1_and, t_1, gk, ks_key, and_4);
+    and_fhe(t_2_and, t_2, gk, ks_key, and_8);
+    and_fhe(t_3_and, t_3, gk, ks_key, and_1);
+
+    lweCopy(a[i+1][0], t_0_and[0],gk->lwe_key->params); 
+    lweAddTo(a[i+1][0], t_1_and[0], gk->lwe_key->params);
+    lweAddTo(a[i+1][0], t_2_and[0], gk->lwe_key->params);
+    lweAddTo(a[i+1][0], t_3_and[0], gk->lwe_key->params);
+    
+  //calcul du quatrieme nibble
+    and_fhe(t_0_and, t_0, gk, ks_key, and_1);
+    and_fhe(t_1_and, t_1, gk, ks_key, and_2);
+    and_fhe(t_2_and, t_2, gk,ks_key, and_4);
+    and_fhe(t_3_and, t_3, gk, ks_key, and_8);
+
+    lweCopy(a[i+1][1], t_0_and[0],gk->lwe_key->params); 
+    lweAddTo(a[i+1][1], t_1_and[0], gk->lwe_key->params);
+    lweAddTo(a[i+1][1], t_2_and[0], gk->lwe_key->params);
+    lweAddTo(a[i+1][1], t_3_and[0], gk->lwe_key->params);
+
+  }
+}
+
+
+
+
+
+
+
+void shiftrows_fhe(vector <LweSample*> a[8], int d){
+
+   vector <LweSample*> tmp;
+  if(d>0){ //permutation classique
+    tmp.push_back(a[1].back()); a[1].pop_back();
+    tmp.push_back(a[1].back()); a[1].pop_back();
+    tmp.push_back(a[5].back()); a[5].pop_back();
+    a[1].push_back(a[5].back()); a[5].pop_back();
+    a[1].push_back(a[7].back()); a[7].pop_back();
+    tmp.push_back(a[3].back()); a[3].pop_back();
+    tmp.push_back(a[3].back()); a[3].pop_back();
+    a[3].push_back(a[7].back()); a[7].pop_back();
+    a[7].push_back(tmp.back());  tmp.pop_back();
+    a[1].push_back(tmp.back());  tmp.pop_back();//temporairement
+    a[7].push_back(tmp.back()); tmp.pop_back();
+    a[5].push_back(tmp.back()); tmp.pop_back();
+    a[5].push_back(a[1].back()); a[1].pop_back();
+    a[3].push_back(tmp.back()); tmp.pop_back();
+    
+    tmp.push_back(a[0].back()); a[0].pop_back();
+    a[0].push_back(a[2].back()); a[2].pop_back();
+    a[2].push_back(a[4].back()); a[4].pop_back();
+    a[4].push_back(a[6].back()); a[6].pop_back();
+    a[6].push_back(tmp.back()); tmp.pop_back();
+  }
+  else{ //permutation inversée
+
+    tmp.push_back(a[5].back()); a[5].pop_back();
+    tmp.push_back(a[1].back()); a[1].pop_back();
+    tmp.push_back(a[1].back()); a[1].pop_back();
+    a[1].push_back(a[5].back()); a[5].pop_back();
+    a[1].push_back(a[3].back()); a[3].pop_back();
+    tmp.push_back(a[7].back()); a[7].pop_back();
+    tmp.push_back(a[7].back()); a[7].pop_back();
+    a[7].push_back(a[3].back()); a[3].pop_back();
+    a[3].push_back(tmp.back());  tmp.pop_back();
+    a[1].push_back(tmp.back());  tmp.pop_back();//temporairement
+    a[5].push_back(tmp.back()); tmp.pop_back();
+    a[5].push_back(a[1].back()); a[1].pop_back();
+    a[7].push_back(tmp.back()); tmp.pop_back();
+    a[3].push_back(tmp.back()); tmp.pop_back();
+
+    tmp.push_back(a[6].back()); a[6].pop_back();
+    a[6].push_back(a[4].back()); a[4].pop_back();
+    a[4].push_back(a[2].back()); a[2].pop_back();
+    a[2].push_back(a[0].back()); a[0].pop_back();
+    a[0].push_back(tmp.back()); tmp.pop_back();
+  }
+}
+
+
+
+
+void m_layer_fhe(vector <LweSample*> a[8], TFheGateBootstrappingSecretKeySet* gk, BaseBKeySwitchKey* ks_key){
+  m_prime_fhe(a, gk, ks_key);
+  shiftrows_fhe(a,1);
+  
+}
+
+void inv_m_layer_fhe(vector <LweSample*> a[8], TFheGateBootstrappingSecretKeySet* gk, BaseBKeySwitchKey* ks_key){
+  shiftrows_fhe(a,-1);
+  m_prime_fhe(a, gk, ks_key);
+}
+
+
+void prince_core_fhe(vector <LweSample*> a[8], vector <LweSample*> rc_k[12][8], TFheGateBootstrappingSecretKeySet* gk, BaseBKeySwitchKey* ks_key){
+  printf("Entrée dans prince core !\n");
+  //(1) faire le xore des nibbles avec k1 xorée à la constante de tour
+  xor_k_and_rc(a, rc_k[0], gk, ks_key);
+  //(2) on itère 5 rounds de PRINCE
+  for(int i=0 ; i<5 ; i++){
+    s_layer_fhe(a, gk, ks_key);
+    m_layer_fhe(a, gk, ks_key);
+    xor_k_and_rc(a, rc_k[i+1], gk, ks_key);
+  }
+  //(3) on applique la sbox
+  s_layer_fhe(a, gk, ks_key);
+  //(4) on multiplie par M'
+  m_prime_fhe(a, gk, ks_key);
+  //(5) on applique la sbox inverse
+  inv_s_layer_fhe(a, gk, ks_key);
+  //(6) on itère 5 rounds modifiés de PRINCE
+  for(int i=0 ; i<5; i++){
+    xor_k_and_rc(a, rc_k[i+6], gk, ks_key);
+    inv_m_layer_fhe(a, gk, ks_key);
+    inv_s_layer_fhe(a, gk, ks_key);
+  }
+  //(7) on ajoute la dernière constante de tour
+  xor_k_and_rc(a, rc_k[11], gk, ks_key);
+}
+
+
+
