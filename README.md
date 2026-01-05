@@ -15,7 +15,7 @@ To run the code, you first have to install the TFHElibrary (you can find it [her
 
 Once TFHElib version 1.1 and the provided patch are installed, you should:
 
-1/ go in the directory of the block cipher you want to evaluate
+1/ go in the directory of the block cipher you want to evaluate      
 2/ follow the instructions given in the corresponding README file.
 
 
