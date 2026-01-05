@@ -13,7 +13,7 @@ Once TFHElib version 1.1 and the provided patch are installed, you should:
 2/ Update the path to the TFHElib directory in the provided sources/CMakeList.txt.     
 3/ In the clefia directory, run the "cmake -S . -B ./build" command.      
 4/ Run "cd build ; make" to finalize compilation.     
-5/ Command "../bin/clefia" will then run our AES homomorphic evaluation.   
+5/ Command "../bin/clefia" will then run our CLEFIA homomorphic evaluation.   
 
 
 Note that the sources/encrypt.c file is the original source code of CLEFIA.
