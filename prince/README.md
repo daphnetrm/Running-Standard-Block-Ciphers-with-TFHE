@@ -1,4 +1,4 @@
-# Homomorphic Evaluation of CLEFIA
+# Homomorphic Evaluation of PRINCE
 
 ## Install TFHElib
 
@@ -16,4 +16,4 @@ Once TFHElib version 1.1 and the provided patch are installed, you should:
 5/ Command "../bin/prince" will then run our PRINCE homomorphic evaluation.   
 
 
-Note that the sources/encrypt.c file is the original source code of PRINCE.
+
