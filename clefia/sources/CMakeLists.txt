@@ -1,4 +1,4 @@
-set(TFHE_PREFIX /home/admin-lcyl/tfhe)
+set(TFHE_PREFIX /insert/path/here)
 set(APP_NAME clefia)
 set(SOME_NAME clefia)
 set(MAIN1 ${CMAKE_CURRENT_LIST_DIR}/main.cpp)
